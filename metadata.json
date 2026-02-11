@@ -1,0 +1,5 @@
+{
+  "name": "BPM Battle Multiplayer",
+  "description": "A competitive real-time rhythm game where you tap to the beat to match a target BPM and climb the leaderboard using Peer-to-Peer technology.",
+  "requestFramePermissions": []
+}
