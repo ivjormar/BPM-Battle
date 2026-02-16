@@ -24,10 +24,13 @@ const App: React.FC = () => {
 
   const connectionsRef = useRef<Map<string, any>>(new Map());
   const playersRef = useRef<Player[]>([]);
+  const stateRef = useRef({ status, roundStatus, targetBpm, roundDuration, timer });
 
+  // Sync refs for stable message handling
   useEffect(() => {
     playersRef.current = players;
-  }, [players]);
+    stateRef.current = { status, roundStatus, targetBpm, roundDuration, timer };
+  }, [players, status, roundStatus, targetBpm, roundDuration, timer]);
 
   const broadcast = useCallback((msg: PeerMessage) => {
     connectionsRef.current.forEach((conn) => {
@@ -36,21 +39,27 @@ const App: React.FC = () => {
   }, []);
 
   const handleMessage = useCallback((msg: PeerMessage) => {
+    console.log("Mensaje recibido:", msg.type, msg.payload);
+    const { status, roundStatus, targetBpm, roundDuration, timer } = stateRef.current;
+
     switch (msg.type) {
       case 'PLAYER_JOIN_REQUEST':
-        if (isHost) {
-          setPendingPlayers(prev => [...prev.filter(p => p.id !== msg.senderId), { id: msg.senderId, nickname: msg.payload.nickname }]);
-        }
+        setPendingPlayers(prev => {
+          if (prev.find(p => p.id === msg.senderId)) return prev;
+          return [...prev, { id: msg.senderId, nickname: msg.payload.nickname }];
+        });
         break;
+
       case 'PLAYER_JOIN_RESPONSE':
         if (msg.payload.accepted) {
           setStatus('ROOM');
           setJoinError(null);
         } else {
-          setJoinError(msg.payload.message || 'El host ha rechazado tu solicitud.');
-          leaveGame();
+          setJoinError(msg.payload.message || 'Entrada denegada.');
+          setTimeout(() => leaveGame(), 2000);
         }
         break;
+
       case 'STATE_UPDATE':
         setPlayers(msg.payload.players);
         setTargetBpm(msg.payload.targetBpm);
@@ -59,12 +68,13 @@ const App: React.FC = () => {
         setRoundDuration(msg.payload.roundDuration);
         setTimer(msg.payload.timer);
         break;
+
       case 'PLAYER_STAT_UPDATE':
+        const updatedPlayers = playersRef.current.map(p => 
+          p.id === msg.senderId ? { ...p, ...msg.payload } : p
+        );
+        setPlayers(updatedPlayers);
         if (isHost) {
-          const updatedPlayers = playersRef.current.map(p => 
-            p.id === msg.senderId ? { ...p, ...msg.payload } : p
-          );
-          setPlayers(updatedPlayers);
           broadcast({ 
             type: 'STATE_UPDATE', 
             payload: { players: updatedPlayers, targetBpm, status, roundStatus, roundDuration, timer },
@@ -72,31 +82,47 @@ const App: React.FC = () => {
           });
         }
         break;
+
       case 'TAP_EVENT':
         setPlayers(prev => prev.map(p => 
           p.id === msg.senderId ? { ...p, lastTap: Date.now() } : p
         ));
         break;
     }
-  }, [isHost, peerId, targetBpm, status, roundStatus, roundDuration, timer, broadcast]);
+  }, [isHost, peerId, broadcast]);
 
-  const setupPeer = (id: string) => {
+  const setupPeer = (id: string, isHostRole: boolean) => {
+    if (peer) peer.destroy();
+    
     const p = new Peer(id);
-    p.on('open', (id: string) => setPeerId(id));
+    
+    p.on('open', (newId: string) => {
+      setPeerId(newId);
+    });
+
     p.on('connection', (conn: any) => {
       conn.on('open', () => {
         connectionsRef.current.set(conn.peer, conn);
       });
       conn.on('data', (data: PeerMessage) => handleMessage(data));
       conn.on('close', () => {
-        if (isHost) {
-          setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
-          const filtered = playersRef.current.filter(p => p.id !== conn.peer);
-          setPlayers(filtered);
-          broadcast({ type: 'STATE_UPDATE', payload: { players: filtered, targetBpm, status, roundStatus, roundDuration, timer }, senderId: peerId });
+        setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
+        const filtered = playersRef.current.filter(p => p.id !== conn.peer);
+        setPlayers(filtered);
+        if (isHostRole) {
+          const { targetBpm, status, roundStatus, roundDuration, timer } = stateRef.current;
+          broadcast({ type: 'STATE_UPDATE', payload: { players: filtered, targetBpm, status, roundStatus, roundDuration, timer }, senderId: id });
         }
       });
     });
+
+    p.on('error', (err: any) => {
+      console.error("PeerJS Error:", err.type);
+      if (err.type === 'peer-unavailable') {
+        setJoinError("La sala no existe o el ID es incorrecto.");
+      }
+    });
+
     setPeer(p);
     return p;
   };
@@ -105,25 +131,32 @@ const App: React.FC = () => {
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(true);
-    const hostId = `bpm-${Math.random().toString(36).substring(2, 9)}`;
+    const hostId = `bpm-${Math.random().toString(36).substring(2, 8)}`;
     setRoomId(hostId);
-    setupPeer(hostId);
-    setPlayers([]);
+    setupPeer(hostId, true);
+    setPlayers([{ id: hostId, nickname: nick, bpm: 0, accuracy: 0, lastTap: 0, isHost: true, totalScore: 0, roundScore: 0 }]);
     setStatus('ROOM');
     window.location.hash = hostId;
   };
 
   const joinGame = (nick: string, targetRoomId: string) => {
+    // Normalizar ID
+    let normalized = targetRoomId.trim().toLowerCase();
+    if (!normalized.startsWith('bpm-')) normalized = 'bpm-' + normalized;
+
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
-    setRoomId(targetRoomId);
-    setJoinError('Solicitando entrada...');
-    const p = setupPeer(`bpm-client-${Math.random().toString(36).substring(2, 9)}`);
-    p.on('open', (myId: string) => {
-      const conn = p.connect(targetRoomId);
+    setRoomId(normalized);
+    setJoinError('Solicitando entrada al Host...');
+
+    const myId = `bpm-client-${Math.random().toString(36).substring(2, 8)}`;
+    const p = setupPeer(myId, false);
+
+    p.on('open', () => {
+      const conn = p.connect(normalized, { reliable: true });
       conn.on('open', () => {
-        connectionsRef.current.set(targetRoomId, conn);
+        connectionsRef.current.set(normalized, conn);
         conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: myId });
       });
       conn.on('data', (data: PeerMessage) => handleMessage(data));
@@ -150,6 +183,7 @@ const App: React.FC = () => {
       conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: true }, senderId: peerId });
     }
 
+    const { targetBpm, status, roundStatus, roundDuration, timer } = stateRef.current;
     broadcast({ 
       type: 'STATE_UPDATE', 
       payload: { players: updatedPlayers, targetBpm, status, roundStatus, roundDuration, timer },
@@ -173,7 +207,6 @@ const App: React.FC = () => {
     setPeerId('');
     setRoomId('');
     setStatus('LOBBY');
-    setRoundStatus('CONFIG');
     setPlayers([]);
     setPendingPlayers([]);
     setIsHost(false);
@@ -199,6 +232,7 @@ const App: React.FC = () => {
     const resetPlayers = playersRef.current.map(p => ({ ...p, bpm: 0, roundScore: 0 }));
     setPlayers(resetPlayers);
     setRoundStatus('ACTIVE');
+    
     broadcast({ 
       type: 'STATE_UPDATE', 
       payload: { players: resetPlayers, targetBpm: target, status: 'PLAYING', roundStatus: 'ACTIVE', roundDuration: duration, timer: duration },
@@ -253,15 +287,29 @@ const App: React.FC = () => {
   };
 
   const updateMyStats = (bpm: number) => {
-    const hostConn = connectionsRef.current.get(roomId);
-    if (hostConn) {
-      hostConn.send({ type: 'PLAYER_STAT_UPDATE', payload: { bpm }, senderId: peerId });
+    if (isHost) {
+      const updated = playersRef.current.map(p => p.id === peerId ? { ...p, bpm } : p);
+      setPlayers(updated);
+      const { status, roundStatus, targetBpm, roundDuration, timer } = stateRef.current;
+      broadcast({ type: 'STATE_UPDATE', payload: { players: updated, targetBpm, status, roundStatus, roundDuration, timer }, senderId: peerId });
+    } else {
+      const hostConn = connectionsRef.current.get(roomId);
+      if (hostConn && hostConn.open) {
+        hostConn.send({ type: 'PLAYER_STAT_UPDATE', payload: { bpm }, senderId: peerId });
+      }
     }
   };
 
   const sendLocalTap = () => {
     setLastLocalTap(Date.now());
-    broadcast({ type: 'TAP_EVENT', payload: {}, senderId: peerId });
+    if (!isHost) {
+      const hostConn = connectionsRef.current.get(roomId);
+      if (hostConn && hostConn.open) {
+        hostConn.send({ type: 'TAP_EVENT', payload: {}, senderId: peerId });
+      }
+    } else {
+      broadcast({ type: 'TAP_EVENT', payload: {}, senderId: peerId });
+    }
   };
 
   return (
@@ -269,7 +317,11 @@ const App: React.FC = () => {
       {status === 'LOBBY' ? (
         <div className="flex flex-col items-center">
           <Lobby initialNickname={nickname} initialRoomId={roomId} onCreate={createGame} onJoin={joinGame} />
-          {joinError && <p className="mt-4 text-indigo-600 font-bold animate-pulse">{joinError}</p>}
+          {joinError && (
+            <div className="mt-6 bg-indigo-50 border border-indigo-100 px-6 py-3 rounded-2xl animate-pulse">
+              <p className="text-indigo-600 font-bold text-sm">{joinError}</p>
+            </div>
+          )}
         </div>
       ) : (
         <GameRoom 
