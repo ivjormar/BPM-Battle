@@ -40,27 +40,27 @@ const App: React.FC = () => {
 
   const handleMessage = useCallback((msg: PeerMessage) => {
     if (!msg || !msg.type) return;
-    console.log("[DEBUG] Mensaje recibido:", msg.type, "de:", msg.senderId);
+    console.log("[DATA] Tipo:", msg.type, "De:", msg.senderId);
     const s = stateRef.current;
 
     switch (msg.type) {
       case 'PLAYER_JOIN_REQUEST':
-        // Si el jugador ya está en pendientes o en la sala, ignoramos
-        if (pendingPlayers.find(p => p.id === msg.senderId) || playersRef.current.find(p => p.id === msg.senderId)) return;
-        console.log("[DEBUG] Agregando a pendientes:", msg.payload.nickname);
-        setPendingPlayers(prev => [...prev, { id: msg.senderId, nickname: msg.payload.nickname }]);
+        setPendingPlayers(prev => {
+          if (prev.find(p => p.id === msg.senderId) || playersRef.current.find(p => p.id === msg.senderId)) return prev;
+          console.log("[HOSPITALIDAD] Nueva solicitud de:", msg.payload.nickname);
+          return [...prev, { id: msg.senderId, nickname: msg.payload.nickname }];
+        });
         break;
 
       case 'PLAYER_JOIN_RESPONSE':
         if (msg.payload.accepted) {
-          console.log("[DEBUG] ¡Entrada aceptada!");
+          console.log("[CONECTADO] El Host nos aceptó.");
           if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
           setStatus('ROOM');
           setJoinError(null);
         } else {
           setJoinError(msg.payload.message || 'Entrada denegada');
           if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
-          setTimeout(() => leaveGame(), 3000);
         }
         break;
 
@@ -89,69 +89,66 @@ const App: React.FC = () => {
         setPlayers(prev => prev.map(p => p.id === msg.senderId ? { ...p, lastTap: Date.now() } : p));
         break;
     }
-  }, [broadcast, pendingPlayers]);
+  }, [broadcast]);
 
   const handleMessageRef = useRef(handleMessage);
   useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);
 
   const setupConnection = (conn: any) => {
-    console.log("[DEBUG] Configurando conexión con:", conn.peer);
-    connectionsRef.current.set(conn.peer, conn);
+    console.log("[CONEXION] Vinculando eventos para:", conn.peer);
+    
+    const onOpen = () => {
+      console.log("[CONEXION] Canal ABIERTO con:", conn.peer);
+      connectionsRef.current.set(conn.peer, conn);
+      if (stateRef.current.isHost) {
+        // El Host envía un mensaje inmediato para confirmar que el canal funciona
+        conn.send({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm: stateRef.current.targetBpm, status: stateRef.current.status, roundStatus: stateRef.current.roundStatus, roundDuration: stateRef.current.roundDuration, timer: stateRef.current.timer }, senderId: stateRef.current.peerId });
+      }
+    };
 
     conn.on('data', (data: any) => {
-      console.log("[DEBUG] Datos crudos recibidos:", data);
+      console.log("[CONEXION] Mensaje de", conn.peer, ":", data);
       handleMessageRef.current(data);
     });
 
+    conn.on('open', onOpen);
+    conn.on('error', (err: any) => console.error("[ERROR CANAL]", conn.peer, err));
     conn.on('close', () => {
-      console.log("[DEBUG] Conexión cerrada:", conn.peer);
+      console.log("[CONEXION] Cerrada:", conn.peer);
       connectionsRef.current.delete(conn.peer);
       setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
-      const filtered = playersRef.current.filter(p => p.id !== conn.peer);
-      setPlayers(filtered);
-      
-      const s = stateRef.current;
-      if (s.isHost) {
-        broadcast({ 
-          type: 'STATE_UPDATE', 
-          payload: { players: filtered, targetBpm: s.targetBpm, status: s.status, roundStatus: s.roundStatus, roundDuration: s.roundDuration, timer: s.timer }, 
-          senderId: s.peerId 
-        });
-      }
+      setPlayers(prev => prev.filter(p => p.id !== conn.peer));
     });
 
-    conn.on('open', () => {
-      console.log("[DEBUG] Canal de datos abierto con:", conn.peer);
-      // Si soy el host, mando un mensaje de "Estoy vivo" al cliente para despertar el canal
-      if (stateRef.current.isHost) {
-        conn.send({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm: stateRef.current.targetBpm, status: stateRef.current.status, roundStatus: stateRef.current.roundStatus, roundDuration: stateRef.current.roundDuration, timer: stateRef.current.timer }, senderId: stateRef.current.peerId });
-      }
-    });
+    // Si ya está abierta por alguna razón, disparar onOpen manualmente
+    if (conn.open) onOpen();
   };
 
   const setupPeer = (id: string) => {
     if (peerRef.current) peerRef.current.destroy();
     
-    console.log("[DEBUG] Iniciando PeerJS ID:", id);
-    const p = new Peer(id, { debug: 1 });
+    console.log("[PEER] Iniciando con ID:", id);
+    const p = new Peer(id, {
+      debug: 2,
+      config: {
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      }
+    });
     peerRef.current = p;
     
     p.on('open', (newId: string) => {
-      console.log("[DEBUG] Mi ID está activo:", newId);
+      console.log("[PEER] Servidor listo. Mi ID:", newId);
       setPeerId(newId);
     });
 
     p.on('connection', (conn: any) => {
-      console.log("[DEBUG] Nueva conexión entrante:", conn.peer);
+      console.log("[PEER] Solicitud de conexión entrante de:", conn.peer);
       setupConnection(conn);
     });
 
     p.on('error', (err: any) => {
-      console.error("[DEBUG] Error de PeerJS:", err.type);
-      if (err.type === 'peer-unavailable') {
-        setJoinError("No se encuentra la sala.");
-        if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
-      }
+      console.error("[PEER ERROR]", err.type);
+      if (err.type === 'peer-unavailable') setJoinError("La sala no existe o el Host no responde.");
     });
 
     return p;
@@ -161,8 +158,7 @@ const App: React.FC = () => {
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(true);
-    const rawId = Math.random().toString(36).substring(2, 8).toLowerCase();
-    const hostId = `bpm-${rawId}`;
+    const hostId = `bpm-${Math.random().toString(36).substring(2, 8)}`;
     setRoomId(hostId);
     setupPeer(hostId);
     setPlayers([{ id: hostId, nickname: nick, bpm: 0, accuracy: 0, lastTap: 0, isHost: true, totalScore: 0, roundScore: 0 }]);
@@ -175,26 +171,27 @@ const App: React.FC = () => {
     if (normalized.includes('#')) normalized = normalized.split('#').pop() || '';
     if (!normalized.startsWith('bpm-')) normalized = 'bpm-' + normalized;
 
-    console.log("[DEBUG] Intentando unir a:", normalized);
+    console.log("[JOIN] Destino:", normalized);
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
     setRoomId(normalized);
     setJoinError('Buscando al Host...');
 
-    const myId = `bpm-client-${Math.random().toString(36).substring(2, 8)}`;
-    const p = setupPeer(myId);
+    const p = setupPeer(`client-${Math.random().toString(36).substring(2, 6)}`);
 
-    p.on('open', (id: string) => {
+    p.on('open', (myId: string) => {
       const conn = p.connect(normalized);
       setupConnection(conn);
       
-      // Sistema de insistencia: mandamos la petición cada 2 segundos hasta entrar
+      // Intentar enviar cada 2 segundos hasta que el host responda
       joinIntervalRef.current = window.setInterval(() => {
         if (conn.open) {
-          console.log("[DEBUG] Re-enviando JOIN_REQUEST...");
-          conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: id });
-          setJoinError('Solicitando entrada...');
+          console.log("[JOIN] Enviando petición...");
+          conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: myId });
+          setJoinError('Solicitando entrada (insistiendo)...');
+        } else {
+          setJoinError('Conectando canal de datos...');
         }
       }, 2000);
     });
@@ -208,29 +205,25 @@ const App: React.FC = () => {
       id: pending.id, nickname: pending.nickname, bpm: 0, accuracy: 0, lastTap: 0, isHost: false, totalScore: 0, roundScore: 0
     };
 
-    const updatedPlayers = [...playersRef.current, newPlayer];
-    setPlayers(updatedPlayers);
-    setPendingPlayers(prev => prev.filter(p => p.id !== requestId));
-
-    const conn = connectionsRef.current.get(requestId);
-    if (conn) {
-      console.log("[DEBUG] Enviando aceptación a:", requestId);
-      conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: true }, senderId: peerId });
-    }
-
-    const s = stateRef.current;
-    broadcast({ 
-      type: 'STATE_UPDATE', 
-      payload: { players: updatedPlayers, targetBpm: s.targetBpm, status: s.status, roundStatus: s.roundStatus, roundDuration: s.roundDuration, timer: s.timer },
-      senderId: s.peerId 
+    setPlayers(prev => {
+      const updated = [...prev, newPlayer];
+      const conn = connectionsRef.current.get(requestId);
+      if (conn) {
+        conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: true }, senderId: peerId });
+      }
+      broadcast({ 
+        type: 'STATE_UPDATE', 
+        payload: { players: updated, targetBpm: stateRef.current.targetBpm, status: stateRef.current.status, roundStatus: stateRef.current.roundStatus, roundDuration: stateRef.current.roundDuration, timer: stateRef.current.timer },
+        senderId: peerId 
+      });
+      return updated;
     });
+    setPendingPlayers(prev => prev.filter(p => p.id !== requestId));
   };
 
   const rejectPlayer = (requestId: string) => {
     const conn = connectionsRef.current.get(requestId);
-    if (conn) {
-      conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: false, message: 'Rechazado.' }, senderId: peerId });
-    }
+    if (conn) conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: false, message: 'Rechazado por el host.' }, senderId: peerId });
     setPendingPlayers(prev => prev.filter(p => p.id !== requestId));
   };
 
@@ -355,7 +348,7 @@ const App: React.FC = () => {
         <div className="flex flex-col items-center">
           <Lobby initialNickname={nickname} initialRoomId={roomId} onCreate={createGame} onJoin={joinGame} />
           {joinError && (
-            <div className="mt-6 bg-white border border-slate-200 px-6 py-3 rounded-2xl shadow-sm animate-pulse">
+            <div className="mt-6 bg-white border border-slate-200 px-6 py-3 rounded-2xl shadow-sm">
               <p className="text-indigo-600 font-bold text-sm text-center">{joinError}</p>
             </div>
           )}
