@@ -12,6 +12,9 @@ interface GameRoomProps {
   roundStatus: RoundStatus;
   targetBpm: number;
   timer: number;
+  pendingPlayers?: {id: string, nickname: string}[];
+  onAccept?: (id: string) => void;
+  onReject?: (id: string) => void;
   onStartSession: () => void;
   onStartRound: (duration: number, target: number) => void;
   onShowScores: () => void;
@@ -26,6 +29,7 @@ interface GameRoomProps {
 
 const GameRoom: React.FC<GameRoomProps> = ({ 
   peerId, roomId, isHost, players, status, roundStatus, targetBpm, timer,
+  pendingPlayers = [], onAccept, onReject,
   onStartSession, onStartRound, onShowScores, onShowFinal, onNextRound, onStatUpdate, onTap, onLeave, lastLocalTap,
   nickname
 }) => {
@@ -99,6 +103,37 @@ const GameRoom: React.FC<GameRoomProps> = ({
           <button onClick={onLeave} className="text-sm font-bold text-red-500 hover:bg-red-50 px-4 py-2 rounded-xl transition-all">Salir</button>
         </div>
 
+        {/* Pending Requests Section for Host */}
+        {isHost && pendingPlayers.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 space-y-4 animate-bounce-short">
+             <div className="flex items-center gap-2">
+               <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse"></span>
+               <h3 className="text-sm font-black text-amber-800 uppercase tracking-widest">Solicitudes de Entrada ({pendingPlayers.length})</h3>
+             </div>
+             <div className="space-y-2">
+               {pendingPlayers.map(req => (
+                 <div key={req.id} className="flex items-center justify-between bg-white p-3 rounded-2xl border border-amber-100 shadow-sm">
+                   <span className="font-bold text-slate-700">{req.nickname}</span>
+                   <div className="flex gap-2">
+                     <button 
+                       onClick={() => onReject?.(req.id)}
+                       className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all"
+                     >
+                       Rechazar
+                     </button>
+                     <button 
+                       onClick={() => onAccept?.(req.id)}
+                       className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-500/20"
+                     >
+                       Aceptar
+                     </button>
+                   </div>
+                 </div>
+               ))}
+             </div>
+          </div>
+        )}
+
         <div className="bg-slate-50 border border-slate-100 rounded-2xl p-6 flex flex-col items-center gap-4">
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">ID de la Sala</p>
           <div className="flex items-center gap-3">
@@ -151,6 +186,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
     );
   }
 
+  // Panel de Host (Control de Rondas)
   if (isHost) {
     return (
       <div className="w-full max-w-4xl bg-white border border-slate-200 rounded-[40px] p-8 space-y-8 shadow-xl">
@@ -217,6 +253,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
     );
   }
 
+  // Panel de Jugador
   return (
     <div className="w-full max-w-2xl space-y-6 animate-in fade-in duration-500">
       {roundStatus === 'CONFIG' && (

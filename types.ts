@@ -23,7 +23,8 @@ export interface GameState {
 }
 
 export type MessageType = 
-  | 'PLAYER_JOIN' 
+  | 'PLAYER_JOIN_REQUEST'
+  | 'PLAYER_JOIN_RESPONSE'
   | 'STATE_UPDATE' 
   | 'TAP_EVENT' 
   | 'PLAYER_STAT_UPDATE'

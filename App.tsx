@@ -15,14 +15,15 @@ const App: React.FC = () => {
   const [roomId, setRoomId] = useState<string>('');
   const [isHost, setIsHost] = useState(false);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [pendingPlayers, setPendingPlayers] = useState<{id: string, nickname: string}[]>([]);
   const [targetBpm, setTargetBpm] = useState(120);
   const [roundDuration, setRoundDuration] = useState(15);
   const [timer, setTimer] = useState(0);
   const [lastLocalTap, setLastLocalTap] = useState(0);
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const connectionsRef = useRef<Map<string, any>>(new Map());
   const playersRef = useRef<Player[]>([]);
-  const timerIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
     playersRef.current = players;
@@ -36,6 +37,20 @@ const App: React.FC = () => {
 
   const handleMessage = useCallback((msg: PeerMessage) => {
     switch (msg.type) {
+      case 'PLAYER_JOIN_REQUEST':
+        if (isHost) {
+          setPendingPlayers(prev => [...prev.filter(p => p.id !== msg.senderId), { id: msg.senderId, nickname: msg.payload.nickname }]);
+        }
+        break;
+      case 'PLAYER_JOIN_RESPONSE':
+        if (msg.payload.accepted) {
+          setStatus('ROOM');
+          setJoinError(null);
+        } else {
+          setJoinError(msg.payload.message || 'El host ha rechazado tu solicitud.');
+          leaveGame();
+        }
+        break;
       case 'STATE_UPDATE':
         setPlayers(msg.payload.players);
         setTargetBpm(msg.payload.targetBpm);
@@ -46,22 +61,9 @@ const App: React.FC = () => {
         break;
       case 'PLAYER_STAT_UPDATE':
         if (isHost) {
-          const playerExists = playersRef.current.some(p => p.id === msg.senderId);
-          let updatedPlayers;
-          
-          if (playerExists) {
-            updatedPlayers = playersRef.current.map(p => 
-              p.id === msg.senderId ? { ...p, ...msg.payload } : p
-            );
-          } else {
-            const newPlayer: Player = {
-              id: msg.senderId,
-              nickname: msg.payload.nickname || 'Anónimo',
-              bpm: 0, accuracy: 0, lastTap: 0, isHost: false, totalScore: 0, roundScore: 0
-            };
-            updatedPlayers = [...playersRef.current, newPlayer];
-          }
-          
+          const updatedPlayers = playersRef.current.map(p => 
+            p.id === msg.senderId ? { ...p, ...msg.payload } : p
+          );
           setPlayers(updatedPlayers);
           broadcast({ 
             type: 'STATE_UPDATE', 
@@ -88,6 +90,7 @@ const App: React.FC = () => {
       conn.on('data', (data: PeerMessage) => handleMessage(data));
       conn.on('close', () => {
         if (isHost) {
+          setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
           const filtered = playersRef.current.filter(p => p.id !== conn.peer);
           setPlayers(filtered);
           broadcast({ type: 'STATE_UPDATE', payload: { players: filtered, targetBpm, status, roundStatus, roundDuration, timer }, senderId: peerId });
@@ -115,22 +118,56 @@ const App: React.FC = () => {
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
     setRoomId(targetRoomId);
+    setJoinError('Solicitando entrada...');
     const p = setupPeer(`bpm-client-${Math.random().toString(36).substring(2, 9)}`);
     p.on('open', (myId: string) => {
       const conn = p.connect(targetRoomId);
       conn.on('open', () => {
         connectionsRef.current.set(targetRoomId, conn);
-        conn.send({ type: 'PLAYER_STAT_UPDATE', payload: { nickname: nick }, senderId: myId });
+        conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: myId });
       });
       conn.on('data', (data: PeerMessage) => handleMessage(data));
       conn.on('close', () => leaveGame());
     });
-    setStatus('ROOM');
+  };
+
+  const acceptPlayer = (requestId: string) => {
+    const pending = pendingPlayers.find(p => p.id === requestId);
+    if (!pending) return;
+
+    const newPlayer: Player = {
+      id: pending.id,
+      nickname: pending.nickname,
+      bpm: 0, accuracy: 0, lastTap: 0, isHost: false, totalScore: 0, roundScore: 0
+    };
+
+    const updatedPlayers = [...playersRef.current, newPlayer];
+    setPlayers(updatedPlayers);
+    setPendingPlayers(prev => prev.filter(p => p.id !== requestId));
+
+    const conn = connectionsRef.current.get(requestId);
+    if (conn) {
+      conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: true }, senderId: peerId });
+    }
+
+    broadcast({ 
+      type: 'STATE_UPDATE', 
+      payload: { players: updatedPlayers, targetBpm, status, roundStatus, roundDuration, timer },
+      senderId: peerId 
+    });
+  };
+
+  const rejectPlayer = (requestId: string) => {
+    const conn = connectionsRef.current.get(requestId);
+    if (conn) {
+      conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: false, message: 'El host ha rechazado tu entrada.' }, senderId: peerId });
+      setTimeout(() => conn.close(), 500);
+    }
+    setPendingPlayers(prev => prev.filter(p => p.id !== requestId));
   };
 
   const leaveGame = () => {
     if (peer) peer.destroy();
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     connectionsRef.current.clear();
     setPeer(null);
     setPeerId('');
@@ -138,6 +175,7 @@ const App: React.FC = () => {
     setStatus('LOBBY');
     setRoundStatus('CONFIG');
     setPlayers([]);
+    setPendingPlayers([]);
     setIsHost(false);
     window.location.hash = '';
   };
@@ -158,22 +196,19 @@ const App: React.FC = () => {
     setTargetBpm(target);
     setRoundDuration(duration);
     setTimer(duration);
-    
     const resetPlayers = playersRef.current.map(p => ({ ...p, bpm: 0, roundScore: 0 }));
     setPlayers(resetPlayers);
     setRoundStatus('ACTIVE');
-
     broadcast({ 
       type: 'STATE_UPDATE', 
       payload: { players: resetPlayers, targetBpm: target, status: 'PLAYING', roundStatus: 'ACTIVE', roundDuration: duration, timer: duration },
       senderId: peerId 
     });
 
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    timerIntervalRef.current = window.setInterval(() => {
+    const interval = window.setInterval(() => {
       setTimer(prev => {
         if (prev <= 1) {
-          clearInterval(timerIntervalRef.current!);
+          clearInterval(interval);
           endRound();
           return 0;
         }
@@ -190,11 +225,7 @@ const App: React.FC = () => {
 
   const endRound = () => {
     setRoundStatus('RESULTS_BPM');
-    broadcast({ 
-      type: 'STATE_UPDATE', 
-      payload: { players: playersRef.current, targetBpm, status: 'PLAYING', roundStatus: 'RESULTS_BPM', roundDuration, timer: 0 },
-      senderId: peerId 
-    });
+    broadcast({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm, status: 'PLAYING', roundStatus: 'RESULTS_BPM', roundDuration, timer: 0 }, senderId: peerId });
   };
 
   const showScores = () => {
@@ -204,38 +235,21 @@ const App: React.FC = () => {
       if (diff === 0) points = 3;
       else if (diff <= 1) points = 2;
       else if (diff <= 2) points = 1;
-      
-      return {
-        ...p,
-        roundScore: points,
-        totalScore: p.totalScore + points
-      };
+      return { ...p, roundScore: points, totalScore: p.totalScore + points };
     });
     setPlayers(scoredPlayers);
     setRoundStatus('RESULTS_SCORES');
-    broadcast({ 
-      type: 'STATE_UPDATE', 
-      payload: { players: scoredPlayers, targetBpm, status: 'PLAYING', roundStatus: 'RESULTS_SCORES', roundDuration, timer: 0 },
-      senderId: peerId 
-    });
+    broadcast({ type: 'STATE_UPDATE', payload: { players: scoredPlayers, targetBpm, status: 'PLAYING', roundStatus: 'RESULTS_SCORES', roundDuration, timer: 0 }, senderId: peerId });
   };
 
   const showFinalStandings = () => {
     setRoundStatus('FINAL');
-    broadcast({ 
-      type: 'STATE_UPDATE', 
-      payload: { players: playersRef.current, targetBpm, status: 'PLAYING', roundStatus: 'FINAL', roundDuration, timer: 0 },
-      senderId: peerId 
-    });
+    broadcast({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm, status: 'PLAYING', roundStatus: 'FINAL', roundDuration, timer: 0 }, senderId: peerId });
   };
 
   const nextRoundConfig = () => {
     setRoundStatus('CONFIG');
-    broadcast({ 
-      type: 'STATE_UPDATE', 
-      payload: { players: playersRef.current, targetBpm, status: 'PLAYING', roundStatus: 'CONFIG', roundDuration, timer: 0 },
-      senderId: peerId 
-    });
+    broadcast({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm, status: 'PLAYING', roundStatus: 'CONFIG', roundDuration, timer: 0 }, senderId: peerId });
   };
 
   const updateMyStats = (bpm: number) => {
@@ -253,11 +267,15 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
       {status === 'LOBBY' ? (
-        <Lobby initialNickname={nickname} initialRoomId={roomId} onCreate={createGame} onJoin={joinGame} />
+        <div className="flex flex-col items-center">
+          <Lobby initialNickname={nickname} initialRoomId={roomId} onCreate={createGame} onJoin={joinGame} />
+          {joinError && <p className="mt-4 text-indigo-600 font-bold animate-pulse">{joinError}</p>}
+        </div>
       ) : (
         <GameRoom 
           peerId={peerId} roomId={roomId} isHost={isHost} players={players} status={status} 
           roundStatus={roundStatus} targetBpm={targetBpm} timer={timer}
+          pendingPlayers={pendingPlayers} onAccept={acceptPlayer} onReject={rejectPlayer}
           onStartSession={startGameSession} onStartRound={startRound} onShowScores={showScores} 
           onShowFinal={showFinalStandings} onNextRound={nextRoundConfig} onStatUpdate={updateMyStats} 
           onTap={sendLocalTap} onLeave={leaveGame} lastLocalTap={lastLocalTap} nickname={nickname}
