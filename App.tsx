@@ -38,11 +38,12 @@ const App: React.FC = () => {
   }, []);
 
   const handleMessage = useCallback((msg: PeerMessage) => {
-    console.log("[DEBUG] Mensaje:", msg.type, "de:", msg.senderId);
+    console.log("[DEBUG] Recibido mensaje tipo:", msg.type, "desde:", msg.senderId);
     const s = stateRef.current;
 
     switch (msg.type) {
       case 'PLAYER_JOIN_REQUEST':
+        console.log("[DEBUG] Petición de unión aceptada en lógica de Host para:", msg.payload.nickname);
         setPendingPlayers(prev => {
           if (prev.find(p => p.id === msg.senderId)) return prev;
           return [...prev, { id: msg.senderId, nickname: msg.payload.nickname }];
@@ -90,10 +91,13 @@ const App: React.FC = () => {
   useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);
 
   const setupConnection = (conn: any) => {
-    console.log("[DEBUG] Configurando conexión con:", conn.peer);
+    if (connectionsRef.current.has(conn.peer)) return;
+    
+    console.log("[DEBUG] Configurando canal de datos para:", conn.peer);
     connectionsRef.current.set(conn.peer, conn);
 
     conn.on('data', (data: any) => {
+      console.log("[DEBUG] Raw data received from", conn.peer, ":", data);
       handleMessageRef.current(data);
     });
 
@@ -114,7 +118,11 @@ const App: React.FC = () => {
       }
     });
 
-    conn.on('error', (err: any) => console.error("[DEBUG] Error en conexión:", err));
+    conn.on('open', () => {
+      console.log("[DEBUG] Conexión confirmada como OPEN con:", conn.peer);
+    });
+
+    conn.on('error', (err: any) => console.error("[DEBUG] Error en conexión con", conn.peer, ":", err));
   };
 
   const setupPeer = (id: string) => {
@@ -131,11 +139,8 @@ const App: React.FC = () => {
 
     p.on('connection', (conn: any) => {
       console.log("[DEBUG] Intento de conexión entrante de:", conn.peer);
-      if (conn.open) {
-        setupConnection(conn);
-      } else {
-        conn.on('open', () => setupConnection(conn));
-      }
+      // REGISTRAR INMEDIATAMENTE - No esperar al evento 'open'
+      setupConnection(conn);
     });
 
     p.on('error', (err: any) => {
@@ -169,19 +174,19 @@ const App: React.FC = () => {
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
     setRoomId(normalized);
-    setJoinError('Conectando con el Host...');
+    setJoinError('Conectando...');
 
     const myId = `bpm-client-${Math.random().toString(36).substring(2, 8)}`;
     const p = setupPeer(myId);
 
     p.on('open', (id: string) => {
       const conn = p.connect(normalized, { reliable: true });
+      setupConnection(conn);
       
       const onConnected = () => {
-        console.log("[DEBUG] Conexión abierta con Host. Enviando petición.");
-        setupConnection(conn);
+        console.log("[DEBUG] Enviando petición JOIN_REQUEST");
         conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: id });
-        setJoinError('Solicitando entrada al Host...');
+        setJoinError('Solicitando entrada...');
       };
 
       if (conn.open) onConnected();
