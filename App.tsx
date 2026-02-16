@@ -84,7 +84,6 @@ const App: React.FC = () => {
     p.on('connection', (conn: any) => {
       conn.on('open', () => {
         connectionsRef.current.set(conn.peer, conn);
-        // On connection, we wait for the PLAYER_STAT_UPDATE message to get the nickname
       });
       conn.on('data', (data: PeerMessage) => handleMessage(data));
       conn.on('close', () => {
@@ -106,7 +105,7 @@ const App: React.FC = () => {
     const hostId = `bpm-${Math.random().toString(36).substring(2, 9)}`;
     setRoomId(hostId);
     setupPeer(hostId);
-    setPlayers([]); // Host doesn't play
+    setPlayers([]);
     setStatus('ROOM');
     window.location.hash = hostId;
   };
@@ -252,7 +251,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
       {status === 'LOBBY' ? (
         <Lobby initialNickname={nickname} initialRoomId={roomId} onCreate={createGame} onJoin={joinGame} />
       ) : (
