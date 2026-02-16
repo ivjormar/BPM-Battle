@@ -101,13 +101,23 @@ const App: React.FC = () => {
       console.log("[CONEXION] Canal ABIERTO con:", conn.peer);
       connectionsRef.current.set(conn.peer, conn);
       if (stateRef.current.isHost) {
-        // El Host envía un mensaje inmediato para confirmar que el canal funciona
-        conn.send({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm: stateRef.current.targetBpm, status: stateRef.current.status, roundStatus: stateRef.current.roundStatus, roundDuration: stateRef.current.roundDuration, timer: stateRef.current.timer }, senderId: stateRef.current.peerId });
+        conn.send({ 
+          type: 'STATE_UPDATE', 
+          payload: { 
+            players: playersRef.current, 
+            targetBpm: stateRef.current.targetBpm, 
+            status: stateRef.current.status, 
+            roundStatus: stateRef.current.roundStatus, 
+            roundDuration: stateRef.current.roundDuration, 
+            timer: stateRef.current.timer 
+          }, 
+          senderId: stateRef.current.peerId 
+        });
       }
     };
 
     conn.on('data', (data: any) => {
-      console.log("[CONEXION] Mensaje de", conn.peer, ":", data);
+      console.log("[CONEXION] Datos de", conn.peer, ":", data);
       handleMessageRef.current(data);
     });
 
@@ -120,7 +130,6 @@ const App: React.FC = () => {
       setPlayers(prev => prev.filter(p => p.id !== conn.peer));
     });
 
-    // Si ya está abierta por alguna razón, disparar onOpen manualmente
     if (conn.open) onOpen();
   };
 
@@ -142,7 +151,7 @@ const App: React.FC = () => {
     });
 
     p.on('connection', (conn: any) => {
-      console.log("[PEER] Solicitud de conexión entrante de:", conn.peer);
+      console.log("[PEER] Conexión entrante de:", conn.peer);
       setupConnection(conn);
     });
 
@@ -161,6 +170,7 @@ const App: React.FC = () => {
     const hostId = `bpm-${Math.random().toString(36).substring(2, 8)}`;
     setRoomId(hostId);
     setupPeer(hostId);
+    // El host se registra pero sus puntuaciones no contarán
     setPlayers([{ id: hostId, nickname: nick, bpm: 0, accuracy: 0, lastTap: 0, isHost: true, totalScore: 0, roundScore: 0 }]);
     setStatus('ROOM');
     window.location.hash = hostId;
@@ -171,12 +181,11 @@ const App: React.FC = () => {
     if (normalized.includes('#')) normalized = normalized.split('#').pop() || '';
     if (!normalized.startsWith('bpm-')) normalized = 'bpm-' + normalized;
 
-    console.log("[JOIN] Destino:", normalized);
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
     setRoomId(normalized);
-    setJoinError('Buscando al Host...');
+    setJoinError('Conectando con el anfitrión...');
 
     const p = setupPeer(`client-${Math.random().toString(36).substring(2, 6)}`);
 
@@ -184,14 +193,13 @@ const App: React.FC = () => {
       const conn = p.connect(normalized);
       setupConnection(conn);
       
-      // Intentar enviar cada 2 segundos hasta que el host responda
       joinIntervalRef.current = window.setInterval(() => {
         if (conn.open) {
-          console.log("[JOIN] Enviando petición...");
+          console.log("[JOIN] Enviando petición de unión...");
           conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: myId });
-          setJoinError('Solicitando entrada (insistiendo)...');
+          setJoinError('Esperando aceptación (reintentando)...');
         } else {
-          setJoinError('Conectando canal de datos...');
+          setJoinError('Abriendo canal de datos...');
         }
       }, 2000);
     });
@@ -202,7 +210,7 @@ const App: React.FC = () => {
     if (!pending) return;
 
     const newPlayer: Player = {
-      id: pending.id, nickname: pending.nickname, bpm: 0, accuracy: 0, lastTap: 0, isHost: false, totalScore: 0, roundScore: 0
+      id: requestId, nickname: pending.nickname, bpm: 0, accuracy: 0, lastTap: 0, isHost: false, totalScore: 0, roundScore: 0
     };
 
     setPlayers(prev => {
@@ -293,6 +301,7 @@ const App: React.FC = () => {
 
   const showScores = () => {
     const scoredPlayers = playersRef.current.map(p => {
+      if (p.isHost) return { ...p, roundScore: 0 };
       const diff = Math.abs(p.bpm - targetBpm);
       let points = 0;
       if (diff === 0) points = 3;
@@ -317,28 +326,24 @@ const App: React.FC = () => {
 
   const updateMyStats = (bpm: number) => {
     const s = stateRef.current;
-    if (s.isHost) {
-      const updated = playersRef.current.map(p => p.id === s.peerId ? { ...p, bpm } : p);
-      setPlayers(updated);
-      broadcast({ type: 'STATE_UPDATE', payload: { players: updated, targetBpm: s.targetBpm, status: s.status, roundStatus: s.roundStatus, roundDuration: s.roundDuration, timer: s.timer }, senderId: s.peerId });
-    } else {
-      const hostConn = connectionsRef.current.get(s.roomId);
-      if (hostConn && hostConn.open) {
-        hostConn.send({ type: 'PLAYER_STAT_UPDATE', payload: { bpm }, senderId: s.peerId });
-      }
+    if (s.isHost) return; // El host no actualiza estadísticas propias
+
+    const hostConn = connectionsRef.current.get(s.roomId);
+    if (hostConn && hostConn.open) {
+      hostConn.send({ type: 'PLAYER_STAT_UPDATE', payload: { bpm }, senderId: s.peerId });
     }
   };
 
   const sendLocalTap = () => {
     setLastLocalTap(Date.now());
     const s = stateRef.current;
-    if (!s.isHost) {
+    if (s.isHost) {
+      broadcast({ type: 'TAP_EVENT', payload: {}, senderId: s.peerId });
+    } else {
       const hostConn = connectionsRef.current.get(s.roomId);
       if (hostConn && hostConn.open) {
         hostConn.send({ type: 'TAP_EVENT', payload: {}, senderId: s.peerId });
       }
-    } else {
-      broadcast({ type: 'TAP_EVENT', payload: {}, senderId: s.peerId });
     }
   };
 
