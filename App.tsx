@@ -25,6 +25,7 @@ const App: React.FC = () => {
   const connectionsRef = useRef<Map<string, any>>(new Map());
   const playersRef = useRef<Player[]>([]);
   const stateRef = useRef({ status, roundStatus, targetBpm, roundDuration, timer, isHost, peerId, roomId });
+  const joinIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
     playersRef.current = players;
@@ -38,25 +39,27 @@ const App: React.FC = () => {
   }, []);
 
   const handleMessage = useCallback((msg: PeerMessage) => {
-    console.log("[DEBUG] Mensaje procesado:", msg.type, "de:", msg.senderId);
+    if (!msg || !msg.type) return;
+    console.log("[DEBUG] Mensaje recibido:", msg.type, "de:", msg.senderId);
     const s = stateRef.current;
 
     switch (msg.type) {
       case 'PLAYER_JOIN_REQUEST':
-        console.log("[DEBUG] ¡NUEVA PETICIÓN RECIBIDA! Nombre:", msg.payload.nickname);
-        setPendingPlayers(prev => {
-          if (prev.find(p => p.id === msg.senderId)) return prev;
-          return [...prev, { id: msg.senderId, nickname: msg.payload.nickname }];
-        });
+        // Si el jugador ya está en pendientes o en la sala, ignoramos
+        if (pendingPlayers.find(p => p.id === msg.senderId) || playersRef.current.find(p => p.id === msg.senderId)) return;
+        console.log("[DEBUG] Agregando a pendientes:", msg.payload.nickname);
+        setPendingPlayers(prev => [...prev, { id: msg.senderId, nickname: msg.payload.nickname }]);
         break;
 
       case 'PLAYER_JOIN_RESPONSE':
         if (msg.payload.accepted) {
-          console.log("[DEBUG] ¡Entrada aceptada por el Host!");
+          console.log("[DEBUG] ¡Entrada aceptada!");
+          if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
           setStatus('ROOM');
           setJoinError(null);
         } else {
           setJoinError(msg.payload.message || 'Entrada denegada');
+          if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
           setTimeout(() => leaveGame(), 3000);
         }
         break;
@@ -86,24 +89,22 @@ const App: React.FC = () => {
         setPlayers(prev => prev.map(p => p.id === msg.senderId ? { ...p, lastTap: Date.now() } : p));
         break;
     }
-  }, [broadcast]);
+  }, [broadcast, pendingPlayers]);
 
   const handleMessageRef = useRef(handleMessage);
   useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);
 
   const setupConnection = (conn: any) => {
-    if (connectionsRef.current.has(conn.peer) && isHost) return;
-    
-    console.log("[DEBUG] Abriendo canal de datos con:", conn.peer);
+    console.log("[DEBUG] Configurando conexión con:", conn.peer);
     connectionsRef.current.set(conn.peer, conn);
 
     conn.on('data', (data: any) => {
-      console.log("[DEBUG] DATA LLEGANDO desde", conn.peer, "->", data);
+      console.log("[DEBUG] Datos crudos recibidos:", data);
       handleMessageRef.current(data);
     });
 
     conn.on('close', () => {
-      console.log("[DEBUG] Conexión cerrada con:", conn.peer);
+      console.log("[DEBUG] Conexión cerrada:", conn.peer);
       connectionsRef.current.delete(conn.peer);
       setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
       const filtered = playersRef.current.filter(p => p.id !== conn.peer);
@@ -119,30 +120,38 @@ const App: React.FC = () => {
       }
     });
 
-    conn.on('error', (err: any) => console.error("[DEBUG] Error en canal de datos:", err));
+    conn.on('open', () => {
+      console.log("[DEBUG] Canal de datos abierto con:", conn.peer);
+      // Si soy el host, mando un mensaje de "Estoy vivo" al cliente para despertar el canal
+      if (stateRef.current.isHost) {
+        conn.send({ type: 'STATE_UPDATE', payload: { players: playersRef.current, targetBpm: stateRef.current.targetBpm, status: stateRef.current.status, roundStatus: stateRef.current.roundStatus, roundDuration: stateRef.current.roundDuration, timer: stateRef.current.timer }, senderId: stateRef.current.peerId });
+      }
+    });
   };
 
   const setupPeer = (id: string) => {
     if (peerRef.current) peerRef.current.destroy();
     
-    console.log("[DEBUG] Inicializando Peer ID:", id);
+    console.log("[DEBUG] Iniciando PeerJS ID:", id);
     const p = new Peer(id, { debug: 1 });
     peerRef.current = p;
     
     p.on('open', (newId: string) => {
-      console.log("[DEBUG] Mi ID está listo:", newId);
+      console.log("[DEBUG] Mi ID está activo:", newId);
       setPeerId(newId);
     });
 
     p.on('connection', (conn: any) => {
-      console.log("[DEBUG] Conexión entrante detectada de:", conn.peer);
+      console.log("[DEBUG] Nueva conexión entrante:", conn.peer);
       setupConnection(conn);
     });
 
     p.on('error', (err: any) => {
-      console.error("[DEBUG] Error de Red (PeerJS):", err.type);
-      if (err.type === 'peer-unavailable') setJoinError("La sala no existe o el Host se ha desconectado.");
-      if (err.type === 'unavailable-id') setJoinError("Este ID ya está en uso.");
+      console.error("[DEBUG] Error de PeerJS:", err.type);
+      if (err.type === 'peer-unavailable') {
+        setJoinError("No se encuentra la sala.");
+        if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
+      }
     });
 
     return p;
@@ -163,37 +172,31 @@ const App: React.FC = () => {
 
   const joinGame = (nick: string, targetRoomId: string) => {
     let normalized = targetRoomId.trim().toLowerCase();
-    if (normalized.includes('#')) normalized = normalized.split('#')[1];
+    if (normalized.includes('#')) normalized = normalized.split('#').pop() || '';
     if (!normalized.startsWith('bpm-')) normalized = 'bpm-' + normalized;
 
-    console.log("[DEBUG] Intentando unir a sala:", normalized);
+    console.log("[DEBUG] Intentando unir a:", normalized);
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
     setRoomId(normalized);
-    setJoinError('Conectando con el Host...');
+    setJoinError('Buscando al Host...');
 
     const myId = `bpm-client-${Math.random().toString(36).substring(2, 8)}`;
     const p = setupPeer(myId);
 
     p.on('open', (id: string) => {
-      const conn = p.connect(normalized, { reliable: true });
+      const conn = p.connect(normalized);
       setupConnection(conn);
       
-      const sendJoinRequest = () => {
-        console.log("[DEBUG] Enviando solicitud JOIN_REQUEST...");
-        conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: id });
-        setJoinError('Solicitando entrada...');
-      };
-
-      if (conn.open) {
-        setTimeout(sendJoinRequest, 800);
-      } else {
-        conn.on('open', () => {
-          console.log("[DEBUG] Canal abierto. Esperando estabilidad...");
-          setTimeout(sendJoinRequest, 800);
-        });
-      }
+      // Sistema de insistencia: mandamos la petición cada 2 segundos hasta entrar
+      joinIntervalRef.current = window.setInterval(() => {
+        if (conn.open) {
+          console.log("[DEBUG] Re-enviando JOIN_REQUEST...");
+          conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: id });
+          setJoinError('Solicitando entrada...');
+        }
+      }, 2000);
     });
   };
 
@@ -211,7 +214,7 @@ const App: React.FC = () => {
 
     const conn = connectionsRef.current.get(requestId);
     if (conn) {
-      console.log("[DEBUG] Enviando respuesta de aceptación a:", requestId);
+      console.log("[DEBUG] Enviando aceptación a:", requestId);
       conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: true }, senderId: peerId });
     }
 
@@ -226,13 +229,13 @@ const App: React.FC = () => {
   const rejectPlayer = (requestId: string) => {
     const conn = connectionsRef.current.get(requestId);
     if (conn) {
-      conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: false, message: 'El host ha rechazado tu entrada.' }, senderId: peerId });
-      setTimeout(() => conn.close(), 500);
+      conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: false, message: 'Rechazado.' }, senderId: peerId });
     }
     setPendingPlayers(prev => prev.filter(p => p.id !== requestId));
   };
 
   const leaveGame = () => {
+    if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
     if (peerRef.current) peerRef.current.destroy();
     peerRef.current = null;
     connectionsRef.current.clear();
