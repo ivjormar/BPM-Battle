@@ -38,12 +38,12 @@ const App: React.FC = () => {
   }, []);
 
   const handleMessage = useCallback((msg: PeerMessage) => {
-    console.log("[DEBUG] Recibido mensaje tipo:", msg.type, "desde:", msg.senderId);
+    console.log("[DEBUG] Mensaje procesado:", msg.type, "de:", msg.senderId);
     const s = stateRef.current;
 
     switch (msg.type) {
       case 'PLAYER_JOIN_REQUEST':
-        console.log("[DEBUG] Petición de unión aceptada en lógica de Host para:", msg.payload.nickname);
+        console.log("[DEBUG] ¡NUEVA PETICIÓN RECIBIDA! Nombre:", msg.payload.nickname);
         setPendingPlayers(prev => {
           if (prev.find(p => p.id === msg.senderId)) return prev;
           return [...prev, { id: msg.senderId, nickname: msg.payload.nickname }];
@@ -52,6 +52,7 @@ const App: React.FC = () => {
 
       case 'PLAYER_JOIN_RESPONSE':
         if (msg.payload.accepted) {
+          console.log("[DEBUG] ¡Entrada aceptada por el Host!");
           setStatus('ROOM');
           setJoinError(null);
         } else {
@@ -91,18 +92,18 @@ const App: React.FC = () => {
   useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);
 
   const setupConnection = (conn: any) => {
-    if (connectionsRef.current.has(conn.peer)) return;
+    if (connectionsRef.current.has(conn.peer) && isHost) return;
     
-    console.log("[DEBUG] Configurando canal de datos para:", conn.peer);
+    console.log("[DEBUG] Abriendo canal de datos con:", conn.peer);
     connectionsRef.current.set(conn.peer, conn);
 
     conn.on('data', (data: any) => {
-      console.log("[DEBUG] Raw data received from", conn.peer, ":", data);
+      console.log("[DEBUG] DATA LLEGANDO desde", conn.peer, "->", data);
       handleMessageRef.current(data);
     });
 
     conn.on('close', () => {
-      console.log("[DEBUG] Conexión cerrada:", conn.peer);
+      console.log("[DEBUG] Conexión cerrada con:", conn.peer);
       connectionsRef.current.delete(conn.peer);
       setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
       const filtered = playersRef.current.filter(p => p.id !== conn.peer);
@@ -118,35 +119,30 @@ const App: React.FC = () => {
       }
     });
 
-    conn.on('open', () => {
-      console.log("[DEBUG] Conexión confirmada como OPEN con:", conn.peer);
-    });
-
-    conn.on('error', (err: any) => console.error("[DEBUG] Error en conexión con", conn.peer, ":", err));
+    conn.on('error', (err: any) => console.error("[DEBUG] Error en canal de datos:", err));
   };
 
   const setupPeer = (id: string) => {
     if (peerRef.current) peerRef.current.destroy();
     
-    console.log("[DEBUG] Iniciando Peer:", id);
-    const p = new Peer(id, { debug: 2 });
+    console.log("[DEBUG] Inicializando Peer ID:", id);
+    const p = new Peer(id, { debug: 1 });
     peerRef.current = p;
     
     p.on('open', (newId: string) => {
-      console.log("[DEBUG] Peer listo. ID:", newId);
+      console.log("[DEBUG] Mi ID está listo:", newId);
       setPeerId(newId);
     });
 
     p.on('connection', (conn: any) => {
-      console.log("[DEBUG] Intento de conexión entrante de:", conn.peer);
-      // REGISTRAR INMEDIATAMENTE - No esperar al evento 'open'
+      console.log("[DEBUG] Conexión entrante detectada de:", conn.peer);
       setupConnection(conn);
     });
 
     p.on('error', (err: any) => {
-      console.error("[DEBUG] Error PeerJS:", err.type);
-      if (err.type === 'peer-unavailable') setJoinError("La sala no existe.");
-      if (err.type === 'unavailable-id') setJoinError("ID ocupado. Intenta de nuevo.");
+      console.error("[DEBUG] Error de Red (PeerJS):", err.type);
+      if (err.type === 'peer-unavailable') setJoinError("La sala no existe o el Host se ha desconectado.");
+      if (err.type === 'unavailable-id') setJoinError("Este ID ya está en uso.");
     });
 
     return p;
@@ -167,14 +163,15 @@ const App: React.FC = () => {
 
   const joinGame = (nick: string, targetRoomId: string) => {
     let normalized = targetRoomId.trim().toLowerCase();
+    if (normalized.includes('#')) normalized = normalized.split('#')[1];
     if (!normalized.startsWith('bpm-')) normalized = 'bpm-' + normalized;
 
-    console.log("[DEBUG] Intentando unir a:", normalized);
+    console.log("[DEBUG] Intentando unir a sala:", normalized);
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
     setRoomId(normalized);
-    setJoinError('Conectando...');
+    setJoinError('Conectando con el Host...');
 
     const myId = `bpm-client-${Math.random().toString(36).substring(2, 8)}`;
     const p = setupPeer(myId);
@@ -183,14 +180,20 @@ const App: React.FC = () => {
       const conn = p.connect(normalized, { reliable: true });
       setupConnection(conn);
       
-      const onConnected = () => {
-        console.log("[DEBUG] Enviando petición JOIN_REQUEST");
+      const sendJoinRequest = () => {
+        console.log("[DEBUG] Enviando solicitud JOIN_REQUEST...");
         conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: id });
         setJoinError('Solicitando entrada...');
       };
 
-      if (conn.open) onConnected();
-      else conn.on('open', onConnected);
+      if (conn.open) {
+        setTimeout(sendJoinRequest, 800);
+      } else {
+        conn.on('open', () => {
+          console.log("[DEBUG] Canal abierto. Esperando estabilidad...");
+          setTimeout(sendJoinRequest, 800);
+        });
+      }
     });
   };
 
@@ -208,6 +211,7 @@ const App: React.FC = () => {
 
     const conn = connectionsRef.current.get(requestId);
     if (conn) {
+      console.log("[DEBUG] Enviando respuesta de aceptación a:", requestId);
       conn.send({ type: 'PLAYER_JOIN_RESPONSE', payload: { accepted: true }, senderId: peerId });
     }
 
