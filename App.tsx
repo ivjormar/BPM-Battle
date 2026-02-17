@@ -135,12 +135,18 @@ const App: React.FC = () => {
       setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
       setPlayers(prev => prev.filter(p => p.id !== conn.peer));
     });
+
+    conn.on('error', (err: any) => {
+      console.error("Error en conexión:", err);
+      if (!stateRef.current.isHost) {
+        setJoinError("Error de conexión con el Host. Reintentando...");
+      }
+    });
   };
 
   const setupPeer = (id: string) => {
     if (peerRef.current) peerRef.current.destroy();
     
-    // Configuración robusta de ICE Servers para permitir conexiones entre redes distintas
     const p = new Peer(id, {
       debug: 1,
       config: {
@@ -148,8 +154,12 @@ const App: React.FC = () => {
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun.services.mozilla.com' }
-        ]
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          { urls: 'stun:stun.services.mozilla.com' },
+          { urls: 'stun:stun.xten.com' }
+        ],
+        iceCandidatePoolSize: 10
       }
     });
     
@@ -157,7 +167,13 @@ const App: React.FC = () => {
     p.on('open', (newId: string) => setPeerId(newId));
     p.on('connection', (conn: any) => setupConnection(conn));
     p.on('error', (err: any) => {
-      if (err.type === 'peer-unavailable') setJoinError("La sala no existe o el Host no responde.");
+      console.error("Peer Error:", err.type);
+      if (err.type === 'peer-unavailable') {
+        setJoinError("La sala no existe o el Host no es alcanzable en esta red.");
+      }
+      if (err.type === 'network') {
+        setJoinError("Error de red. Verifica tu conexión.");
+      }
     });
     return p;
   };
@@ -185,18 +201,24 @@ const App: React.FC = () => {
     setIsHost(false);
     setRoomClosed(false);
     setRoomId(normalized);
-    setJoinError('Conectando con el anfitrión...');
+    setJoinError('Iniciando conexión...');
 
     const p = setupPeer(`client-${Math.random().toString(36).substring(2, 6)}`);
 
     p.on('open', (myId: string) => {
-      const conn = p.connect(normalized);
+      setJoinError('Buscando al anfitrión...');
+      const conn = p.connect(normalized, { 
+        reliable: true,
+        metadata: { nickname: nick }
+      });
       setupConnection(conn);
       
       const interval = window.setInterval(() => {
         if (conn.open) {
           conn.send({ type: 'PLAYER_JOIN_REQUEST', payload: { nickname: nick }, senderId: myId });
-          setJoinError('Esperando aceptación (reintentando)...');
+          setJoinError('Solicitud enviada. Esperando al Host...');
+        } else {
+          setJoinError('Estableciendo túnel P2P seguro...');
         }
       }, 2000);
       joinIntervalRef.current = interval;
@@ -426,11 +448,14 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
       {status === 'LOBBY' ? (
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center w-full">
           <Lobby initialNickname={nickname} initialRoomId={roomId} onCreate={createGame} onJoin={joinGame} />
           {joinError && (
-            <div className="mt-6 bg-white border border-slate-200 px-6 py-3 rounded-2xl shadow-sm">
-              <p className="text-indigo-600 font-bold text-sm text-center">{joinError}</p>
+            <div className="mt-6 bg-white border border-indigo-100 px-8 py-4 rounded-2xl shadow-xl animate-in fade-in zoom-in duration-300">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+                <p className="text-indigo-600 font-bold text-sm text-center">{joinError}</p>
+              </div>
             </div>
           )}
         </div>
