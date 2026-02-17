@@ -41,14 +41,19 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
   const calculateBpm = useCallback(() => {
     const now = Date.now();
+    // Mantenemos una ventana de 2.5 segundos para el cálculo
     tapTimesRef.current = [...tapTimesRef.current, now].filter(t => now - t < 2500);
+    
     if (tapTimesRef.current.length < 2) return;
+    
     const intervals = [];
     for (let i = 1; i < tapTimesRef.current.length; i++) {
       intervals.push(tapTimesRef.current[i] - tapTimesRef.current[i-1]);
     }
+    
     const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
     const bpm = Math.round(60000 / avgInterval);
+    
     setLocalBpm(bpm);
     onStatUpdate(bpm);
   }, [onStatUpdate]);
@@ -62,6 +67,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
   const handleTap = useCallback((e?: React.MouseEvent | KeyboardEvent) => {
     if (e && 'key' in e && e.key !== ' ') return;
+    // Solo permitimos tap si la ronda está activa y no somos el host
     if (roundStatus !== 'ACTIVE' || isHost) return;
     onTap();
     calculateBpm();
@@ -77,6 +83,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
   }, [handleTap, handleReset]);
 
   useEffect(() => {
+    // Al empezar una nueva configuración o ronda, reseteamos el contador visual a 0
     if (roundStatus === 'CONFIG' || roundStatus === 'ACTIVE') {
       setLocalBpm(0);
       tapTimesRef.current = [];
@@ -251,7 +258,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
           </div>
           <div className="text-center space-y-2">
             <span className="text-9xl font-black text-slate-900 leading-none mono tracking-tighter">
-              {localBpm || '--'}
+              {localBpm}
             </span>
             <p className="text-sm font-black text-indigo-600 uppercase tracking-widest">Tu BPM actual</p>
           </div>
