@@ -36,55 +36,44 @@ const GameRoom: React.FC<GameRoomProps> = ({
   const [localBpm, setLocalBpm] = useState(0);
   const [configDuration, setConfigDuration] = useState(15);
   const [configTarget, setConfigTarget] = useState(120);
-  const tapTimesRef = useRef<number[]>([]);
+  const lastTapTimeRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
 
   const calculateBpm = useCallback(() => {
     const now = Date.now();
     
-    // Si ha pasado más de 2 segundos desde el último toque, consideramos que es un nuevo inicio
-    // pero NO reseteamos localBpm para que el número siga en pantalla.
-    if (tapTimesRef.current.length > 0 && now - tapTimesRef.current[tapTimesRef.current.length - 1] > 2000) {
-      tapTimesRef.current = [];
+    // Si ha pasado mucho tiempo (más de 2.5s), reseteamos la referencia de inicio
+    // pero mantenemos el localBpm en pantalla para que el jugador tenga su referencia.
+    if (lastTapTimeRef.current !== null && now - lastTapTimeRef.current > 2500) {
+      lastTapTimeRef.current = null;
     }
 
-    tapTimesRef.current.push(now);
-
-    // Necesitamos al menos 2 toques para el primer cálculo.
-    // Hasta que no haya 2, mantenemos el valor anterior (o 0 si es el inicio).
-    if (tapTimesRef.current.length < 2) return;
-
-    // Reducimos la ventana a los últimos 6 toques para una respuesta extremadamente rápida
-    if (tapTimesRef.current.length > 6) {
-      tapTimesRef.current.shift();
+    if (lastTapTimeRef.current === null) {
+      lastTapTimeRef.current = now;
+      return; // Primer toque de una serie, no podemos calcular aún
     }
 
-    const intervals = [];
-    for (let i = 1; i < tapTimesRef.current.length; i++) {
-      intervals.push(tapTimesRef.current[i] - tapTimesRef.current[i - 1]);
+    // Cálculo instantáneo con respecto al último intervalo (2 toques)
+    const interval = now - lastTapTimeRef.current;
+    if (interval > 0) {
+      const bpm = Math.round(60000 / interval);
+      setLocalBpm(bpm);
+      onStatUpdate(bpm);
     }
 
-    const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    if (avgInterval <= 0) return;
-    
-    const bpm = Math.round(60000 / avgInterval);
-    
-    setLocalBpm(bpm);
-    onStatUpdate(bpm);
+    lastTapTimeRef.current = now;
   }, [onStatUpdate]);
 
   const handleReset = useCallback((e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    tapTimesRef.current = [];
+    lastTapTimeRef.current = null;
     setLocalBpm(0);
     onStatUpdate(0);
   }, [onStatUpdate]);
 
-  const handleTap = useCallback((e?: React.MouseEvent | KeyboardEvent) => {
-    // Evitar comportamientos por defecto del navegador (scroll con espacio, etc)
-    if (e && 'key' in e && (e.key === ' ' || e.key === 'Enter')) {
-      e.preventDefault();
-    }
+  const handleTap = useCallback((e?: React.MouseEvent | KeyboardEvent | React.PointerEvent) => {
+    if (e && 'key' in e && (e.key !== ' ' && e.key !== 'Enter')) return;
+    if (e && 'preventDefault' in e) e.preventDefault();
     
     if (roundStatus !== 'ACTIVE' || isHost) return;
     
@@ -95,7 +84,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
   useEffect(() => {
     const onKeydown = (e: KeyboardEvent) => {
       if (e.key === 'r' || e.key === 'R') handleReset();
-      // Solo manejamos teclas si no estamos en un input
       if (document.activeElement?.tagName !== 'INPUT') {
         handleTap(e);
       }
@@ -107,7 +95,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
   useEffect(() => {
     if (roundStatus === 'CONFIG' || roundStatus === 'ACTIVE') {
       setLocalBpm(0);
-      tapTimesRef.current = [];
+      lastTapTimeRef.current = null;
     }
   }, [roundStatus]);
 
@@ -266,13 +254,14 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
       {roundStatus === 'ACTIVE' && (
         <div 
-          onPointerDown={() => handleTap()} 
-          className="relative h-[450px] bg-white border-4 border-slate-100 hover:border-indigo-100 rounded-[60px] cursor-pointer flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-xl shadow-slate-200/50 select-none touch-none"
+          className="relative h-[550px] bg-white border-4 border-slate-100 rounded-[60px] flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-xl shadow-slate-200/50 select-none touch-none"
         >
-          <div className={`absolute inset-0 bg-indigo-50 transition-opacity duration-150 pointer-events-none ${Date.now() - lastLocalTap < 100 ? 'opacity-100' : 'opacity-0'}`}></div>
+          {/* Flash visual al tocar */}
+          <div className={`absolute inset-0 bg-indigo-50 transition-opacity duration-150 pointer-events-none ${Date.now() - lastLocalTap < 80 ? 'opacity-100' : 'opacity-0'}`}></div>
+          
           <div className="absolute top-8 flex justify-between w-full px-12">
             <div className="flex flex-col">
-              <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Tiempo Restante</span>
+              <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Tiempo</span>
               <span className="text-2xl font-black text-slate-800 mono tracking-tighter">{timer}s</span>
             </div>
             <div className="flex flex-col text-right">
@@ -280,22 +269,37 @@ const GameRoom: React.FC<GameRoomProps> = ({
               <span className="text-2xl font-black text-slate-800 mono tracking-tighter">???</span>
             </div>
           </div>
-          <div className="text-center space-y-2 pointer-events-none">
-            <span className="text-[150px] font-black text-slate-900 leading-none mono tracking-tighter block">
-              {localBpm}
-            </span>
-            <p className="text-sm font-black text-indigo-600 uppercase tracking-widest">Tu Ritmo Actual (BPM)</p>
+
+          <div className="flex flex-col items-center gap-4 z-20">
+            {/* Valor de BPM persistente justo encima del botón */}
+            <div className="text-center animate-in zoom-in duration-300">
+              <span className="text-[140px] font-black text-slate-900 leading-none mono tracking-tighter block drop-shadow-sm">
+                {localBpm}
+              </span>
+              <p className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em] -mt-2">BPM RESULTANTE</p>
+            </div>
+
+            {/* Botón TAP centralizado */}
+            <button 
+              onPointerDown={(e) => handleTap(e)}
+              className="group relative w-48 h-48 bg-indigo-600 hover:bg-indigo-700 active:scale-90 transition-all rounded-full shadow-2xl shadow-indigo-500/40 flex items-center justify-center border-8 border-white"
+            >
+              <span className="text-4xl font-black text-white tracking-widest">TAP</span>
+              {/* Efecto decorativo de ondas */}
+              <div className="absolute inset-0 rounded-full border-4 border-indigo-400 opacity-20 animate-ping group-active:hidden"></div>
+            </button>
           </div>
           
           <button 
             onPointerDown={(e) => { e.stopPropagation(); handleReset(); }}
-            className="absolute bottom-8 right-8 bg-slate-50 hover:bg-slate-100 text-slate-400 p-4 rounded-2xl border border-slate-200 transition-all active:scale-95 z-10 shadow-sm"
+            className="absolute bottom-8 right-8 bg-slate-50 hover:bg-slate-100 text-slate-400 p-4 rounded-2xl border border-slate-200 transition-all active:scale-95 z-30 shadow-sm"
+            title="Reiniciar cálculo (R)"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
           </button>
 
-          <p className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[10px] font-black text-slate-300 uppercase tracking-widest animate-pulse">
-            Toca en cualquier lugar para marcar el ritmo
+          <p className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[10px] font-black text-slate-300 uppercase tracking-widest pointer-events-none">
+            Pulsa el botón o Espacio/Enter
           </p>
         </div>
       )}
