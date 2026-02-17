@@ -129,7 +129,6 @@ const App: React.FC = () => {
 
     conn.on('close', () => {
       connectionsRef.current.delete(conn.peer);
-      // Si el cliente pierde conexión con el host, avisar
       if (!stateRef.current.isHost && conn.peer === stateRef.current.roomId) {
         setRoomClosed(true);
       }
@@ -140,12 +139,20 @@ const App: React.FC = () => {
 
   const setupPeer = (id: string) => {
     if (peerRef.current) peerRef.current.destroy();
+    
+    // Configuración robusta de ICE Servers para permitir conexiones entre redes distintas
     const p = new Peer(id, {
       debug: 1,
       config: {
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun.services.mozilla.com' }
+        ]
       }
     });
+    
     peerRef.current = p;
     p.on('open', (newId: string) => setPeerId(newId));
     p.on('connection', (conn: any) => setupConnection(conn));

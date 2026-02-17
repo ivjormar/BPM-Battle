@@ -38,7 +38,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
   const [configDuration, setConfigDuration] = useState(15);
   const [configTarget, setConfigTarget] = useState(120);
   
-  // Referencias para el cálculo persistente
   const lastTapTimeRef = useRef<number | null>(null);
   const currentBpmRef = useRef<number>(0);
   
@@ -47,7 +46,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
   const calculateBpm = useCallback(() => {
     const now = Date.now();
     
-    // Si ha pasado más de 2.5 segundos, la serie ha terminado, pero mantenemos el visual persistente
     if (lastTapTimeRef.current !== null && now - lastTapTimeRef.current > 2500) {
       lastTapTimeRef.current = null;
     }
@@ -65,7 +63,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
       if (currentBpmRef.current === 0) {
         nextBpm = Math.round(instantBpm);
       } else {
-        // Suavizado Progresivo (EMA) para estabilidad contra errores de ms
         const alpha = 0.35; 
         nextBpm = Math.round((currentBpmRef.current * (1 - alpha)) + (instantBpm * alpha));
       }
@@ -126,20 +123,19 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
   const participantPlayers = players.filter(p => !p.isHost);
 
-  // Overlay de Sala Cerrada
   const RoomClosedOverlay = () => (
-    <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
-      <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center shadow-2xl space-y-6">
-        <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-500">
+    <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-500">
+      <div className="bg-white rounded-[40px] p-10 max-w-sm w-full text-center shadow-2xl border border-white/20">
+        <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto text-red-500 mb-6">
           <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
         </div>
-        <h3 className="text-2xl font-black text-slate-900">Sala Cerrada</h3>
-        <p className="text-slate-500 font-medium leading-relaxed">El Host ha finalizado la partida o se ha desconectado.</p>
+        <h3 className="text-3xl font-black text-slate-900 mb-2">Sala Cerrada</h3>
+        <p className="text-slate-500 font-medium leading-relaxed mb-8">El anfitrión ha finalizado la partida o se ha perdido la conexión.</p>
         <button 
           onClick={onLeave}
-          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4 rounded-2xl shadow-lg transition-all active:scale-95"
+          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4 rounded-2xl shadow-xl shadow-indigo-200 transition-all active:scale-95"
         >
           VOLVER AL INICIO
         </button>
@@ -296,9 +292,8 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
       {roundStatus === 'ACTIVE' && (
         <div 
-          className="relative w-full aspect-[4/5] sm:aspect-square max-h-[85vh] bg-white border-4 border-slate-100 rounded-[40px] sm:rounded-[60px] flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-2xl shadow-slate-200/50 select-none touch-none"
+          className="relative w-full aspect-[4/5] sm:aspect-square max-h-[80vh] bg-white border-4 border-slate-100 rounded-[40px] sm:rounded-[60px] flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-2xl shadow-slate-200/50 select-none touch-none"
         >
-          {/* Flash visual sincronizado */}
           <div className={`absolute inset-0 bg-indigo-500/5 transition-opacity duration-100 pointer-events-none ${Date.now() - lastLocalTap < 70 ? 'opacity-100' : 'opacity-0'}`}></div>
           
           <div className="absolute top-6 sm:top-10 flex justify-between w-full px-8 sm:px-14">
@@ -312,26 +307,26 @@ const GameRoom: React.FC<GameRoomProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-col items-center gap-6 sm:gap-12 z-20 w-full px-4">
-            {/* VALOR DE BPM: Responsivo */}
+          <div className="flex flex-col items-center gap-4 sm:gap-10 z-20 w-full px-4">
+            {/* VALOR DE BPM: Tamaño automático responsivo */}
             <div className="text-center w-full">
               <div className="relative inline-block w-full">
-                <span className="text-[clamp(80px,25vw,180px)] font-black text-slate-900 leading-none mono tracking-tighter block drop-shadow-xl animate-in zoom-in duration-200">
+                <span className="text-[clamp(100px,25vh,200px)] sm:text-[clamp(120px,20vw,240px)] font-black text-slate-900 leading-none mono tracking-tighter block drop-shadow-xl animate-in zoom-in duration-200">
                   {localBpm}
                 </span>
-                <p className="text-[clamp(8px,2vw,12px)] font-black text-indigo-600 uppercase tracking-[0.3em] -mt-2 sm:-mt-4 bg-white/80 backdrop-blur-sm inline-block px-3 sm:px-4 py-1 rounded-full border border-indigo-50">
-                  BPM RESULTANTE
+                <p className="text-[clamp(10px,1.5vh,14px)] font-black text-indigo-600 uppercase tracking-[0.3em] -mt-2 sm:-mt-6 bg-white/90 backdrop-blur-sm inline-block px-4 py-1.5 rounded-full border border-indigo-50 shadow-sm">
+                  BPM ACTUAL
                 </p>
               </div>
             </div>
 
-            {/* BOTÓN TAP: Proporcional al tamaño de pantalla */}
+            {/* BOTÓN TAP: Proporcional al viewport */}
             <button 
               onPointerDown={(e) => handleTap(e)}
-              className="group relative w-[clamp(140px,45vw,250px)] h-[clamp(140px,45vw,250px)] bg-indigo-600 hover:bg-indigo-700 active:scale-90 transition-all rounded-full shadow-[0_20px_50px_rgba(79,70,229,0.3)] flex items-center justify-center border-[8px] sm:border-[12px] border-white"
+              className="group relative w-[clamp(150px,20vh,280px)] h-[clamp(150px,20vh,280px)] sm:w-[clamp(180px,35vw,300px)] sm:h-[clamp(180px,35vw,300px)] bg-indigo-600 hover:bg-indigo-700 active:scale-90 transition-all rounded-full shadow-[0_25px_60px_rgba(79,70,229,0.3)] flex items-center justify-center border-[10px] sm:border-[16px] border-white"
             >
-              <span className="text-3xl sm:text-5xl font-black text-white tracking-widest drop-shadow-md">TAP</span>
-              <div className="absolute inset-[-10px] sm:inset-[-20px] rounded-full border-2 border-indigo-100 opacity-20 animate-ping pointer-events-none group-active:hidden"></div>
+              <span className="text-4xl sm:text-6xl font-black text-white tracking-widest drop-shadow-md">TAP</span>
+              <div className="absolute inset-[-15px] sm:inset-[-25px] rounded-full border-4 border-indigo-100 opacity-20 animate-ping pointer-events-none group-active:hidden"></div>
             </button>
           </div>
           
@@ -340,7 +335,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
             className="absolute bottom-6 right-6 sm:bottom-10 sm:right-10 bg-slate-50 hover:bg-slate-100 text-slate-400 p-4 sm:p-5 rounded-3xl border border-slate-200 transition-all active:scale-95 z-30 shadow-sm"
             title="Reiniciar (R)"
           >
-            <svg className="w-6 h-6 sm:w-7 sm:h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            <svg className="w-6 h-6 sm:w-8 sm:h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
           </button>
 
           <p className="absolute bottom-6 sm:bottom-10 left-1/2 -translate-x-1/2 text-[10px] font-bold text-slate-300 uppercase tracking-widest pointer-events-none italic hidden sm:block">
