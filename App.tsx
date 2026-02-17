@@ -20,11 +20,11 @@ const App: React.FC = () => {
   const [timer, setTimer] = useState(0);
   const [lastLocalTap, setLastLocalTap] = useState(0);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [roomClosed, setRoomClosed] = useState(false);
 
   const peerRef = useRef<any>(null);
   const connectionsRef = useRef<Map<string, any>>(new Map());
   const playersRef = useRef<Player[]>([]);
-  // Use stateRef to handle stale closures in async functions and intervals
   const stateRef = useRef({ status, roundStatus, targetBpm, roundDuration, timer, isHost, peerId, roomId });
 
   useEffect(() => {
@@ -40,24 +40,26 @@ const App: React.FC = () => {
 
   const handleMessage = useCallback((msg: PeerMessage) => {
     if (!msg || !msg.type) return;
-    console.log("[DATA] Tipo:", msg.type, "De:", msg.senderId);
     const s = stateRef.current;
 
     switch (msg.type) {
+      case 'ROOM_CLOSED':
+        setRoomClosed(true);
+        break;
+
       case 'PLAYER_JOIN_REQUEST':
         setPendingPlayers(prev => {
           if (prev.find(p => p.id === msg.senderId) || playersRef.current.find(p => p.id === msg.senderId)) return prev;
-          console.log("[HOSPITALIDAD] Nueva solicitud de:", msg.payload.nickname);
           return [...prev, { id: msg.senderId, nickname: msg.payload.nickname }];
         });
         break;
 
       case 'PLAYER_JOIN_RESPONSE':
         if (msg.payload.accepted) {
-          console.log("[CONECTADO] El Host nos aceptó.");
           if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
           setStatus('ROOM');
           setJoinError(null);
+          setRoomClosed(false);
         } else {
           setJoinError(msg.payload.message || 'Entrada denegada');
           if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
@@ -102,8 +104,11 @@ const App: React.FC = () => {
   useEffect(() => { handleMessageRef.current = handleMessage; }, [handleMessage]);
 
   const setupConnection = (conn: any) => {
-    const onOpen = () => {
-      console.log("[CONEXION] Canal ABIERTO con:", conn.peer);
+    conn.on('data', (data: any) => {
+      handleMessageRef.current(data);
+    });
+
+    conn.on('open', () => {
       connectionsRef.current.set(conn.peer, conn);
       if (stateRef.current.isHost) {
         const s = stateRef.current;
@@ -120,21 +125,17 @@ const App: React.FC = () => {
           senderId: s.peerId 
         });
       }
-    };
-
-    conn.on('data', (data: any) => {
-      handleMessageRef.current(data);
     });
 
-    conn.on('open', onOpen);
-    conn.on('error', (err: any) => console.error("[ERROR CANAL]", conn.peer, err));
     conn.on('close', () => {
       connectionsRef.current.delete(conn.peer);
+      // Si el cliente pierde conexión con el host, avisar
+      if (!stateRef.current.isHost && conn.peer === stateRef.current.roomId) {
+        setRoomClosed(true);
+      }
       setPendingPlayers(prev => prev.filter(p => p.id !== conn.peer));
       setPlayers(prev => prev.filter(p => p.id !== conn.peer));
     });
-
-    if (conn.open) onOpen();
   };
 
   const setupPeer = (id: string) => {
@@ -158,6 +159,7 @@ const App: React.FC = () => {
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(true);
+    setRoomClosed(false);
     const hostId = `bpm-${Math.random().toString(36).substring(2, 8)}`;
     setRoomId(hostId);
     setupPeer(hostId);
@@ -174,6 +176,7 @@ const App: React.FC = () => {
     setNickname(nick);
     localStorage.setItem('bpm-nick', nick);
     setIsHost(false);
+    setRoomClosed(false);
     setRoomId(normalized);
     setJoinError('Conectando con el anfitrión...');
 
@@ -227,6 +230,9 @@ const App: React.FC = () => {
   const joinIntervalRef = useRef<number | null>(null);
 
   const leaveGame = () => {
+    if (stateRef.current.isHost) {
+      broadcast({ type: 'ROOM_CLOSED', payload: {}, senderId: peerId });
+    }
     if (joinIntervalRef.current) clearInterval(joinIntervalRef.current);
     if (peerRef.current) peerRef.current.destroy();
     peerRef.current = null;
@@ -238,6 +244,7 @@ const App: React.FC = () => {
     setPendingPlayers([]);
     setIsHost(false);
     setJoinError(null);
+    setRoomClosed(false);
     window.location.hash = '';
   };
 
@@ -262,17 +269,13 @@ const App: React.FC = () => {
 
   const startRound = (duration: number, target: number) => {
     if (!isHost) return;
-    
-    // Update local state first
     setTargetBpm(target);
     setRoundDuration(duration);
     setTimer(duration);
-    
     const resetPlayers = playersRef.current.map(p => ({ ...p, bpm: 0, roundScore: 0 }));
     setPlayers(resetPlayers);
     setRoundStatus('ACTIVE');
     
-    // Immediate broadcast using direct values (target, duration) to avoid stale state in render cycle
     broadcast({ 
       type: 'STATE_UPDATE', 
       payload: { 
@@ -294,7 +297,6 @@ const App: React.FC = () => {
           return 0;
         }
         const nextTime = prev - 1;
-        // CRITICAL: Must use current values from stateRef to avoid stale closures in broadcast
         const cur = stateRef.current;
         broadcast({ 
           type: 'STATE_UPDATE', 
@@ -433,6 +435,7 @@ const App: React.FC = () => {
           onStartSession={startGameSession} onStartRound={startRound} onShowScores={showScores} 
           onShowFinal={showFinalStandings} onNextRound={nextRoundConfig} onStatUpdate={updateMyStats} 
           onTap={sendLocalTap} onLeave={leaveGame} lastLocalTap={lastLocalTap} nickname={nickname}
+          roomClosed={roomClosed}
         />
       )}
     </div>

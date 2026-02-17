@@ -33,7 +33,8 @@ export type MessageType =
   | 'START_ROUND'
   | 'END_ROUND'
   | 'SHOW_SCORES'
-  | 'SHOW_FINAL';
+  | 'SHOW_FINAL'
+  | 'ROOM_CLOSED';
 
 export interface PeerMessage {
   type: MessageType;
