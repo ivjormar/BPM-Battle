@@ -42,20 +42,20 @@ const GameRoom: React.FC<GameRoomProps> = ({
   const calculateBpm = useCallback(() => {
     const now = Date.now();
     
-    // Si ha pasado demasiado tiempo desde el último toque (ej. 3 segundos), 
-    // reiniciamos el buffer para empezar una nueva medición limpia,
-    // pero MANTENEMOS el localBpm anterior en pantalla.
-    if (tapTimesRef.current.length > 0 && now - tapTimesRef.current[tapTimesRef.current.length - 1] > 3000) {
+    // Si ha pasado más de 2 segundos desde el último toque, consideramos que es un nuevo inicio
+    // pero NO reseteamos localBpm para que el número siga en pantalla.
+    if (tapTimesRef.current.length > 0 && now - tapTimesRef.current[tapTimesRef.current.length - 1] > 2000) {
       tapTimesRef.current = [];
     }
 
     tapTimesRef.current.push(now);
 
-    // Necesitamos al menos 2 toques para calcular un intervalo
+    // Necesitamos al menos 2 toques para el primer cálculo.
+    // Hasta que no haya 2, mantenemos el valor anterior (o 0 si es el inicio).
     if (tapTimesRef.current.length < 2) return;
 
-    // Solo usamos los últimos 8 toques para que el cálculo sea rápido y sensible a cambios de ritmo
-    if (tapTimesRef.current.length > 8) {
+    // Reducimos la ventana a los últimos 6 toques para una respuesta extremadamente rápida
+    if (tapTimesRef.current.length > 6) {
       tapTimesRef.current.shift();
     }
 
@@ -65,7 +65,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
     }
 
     const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    // Evitar división por cero o intervalos absurdos
     if (avgInterval <= 0) return;
     
     const bpm = Math.round(60000 / avgInterval);
@@ -82,13 +81,13 @@ const GameRoom: React.FC<GameRoomProps> = ({
   }, [onStatUpdate]);
 
   const handleTap = useCallback((e?: React.MouseEvent | KeyboardEvent) => {
-    if (e && 'key' in e && e.key !== ' ' && e.key !== 'Enter') return;
-    if (e) {
-      // Prevenir scroll si es espacio
-      if ('key' in e && e.key === ' ') e.preventDefault();
+    // Evitar comportamientos por defecto del navegador (scroll con espacio, etc)
+    if (e && 'key' in e && (e.key === ' ' || e.key === 'Enter')) {
+      e.preventDefault();
     }
     
     if (roundStatus !== 'ACTIVE' || isHost) return;
+    
     onTap();
     calculateBpm();
   }, [roundStatus, isHost, calculateBpm, onTap]);
@@ -96,7 +95,10 @@ const GameRoom: React.FC<GameRoomProps> = ({
   useEffect(() => {
     const onKeydown = (e: KeyboardEvent) => {
       if (e.key === 'r' || e.key === 'R') handleReset();
-      handleTap(e);
+      // Solo manejamos teclas si no estamos en un input
+      if (document.activeElement?.tagName !== 'INPUT') {
+        handleTap(e);
+      }
     };
     window.addEventListener('keydown', onKeydown);
     return () => window.removeEventListener('keydown', onKeydown);
@@ -122,7 +124,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
     return (
       <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-[40px] p-8 space-y-8 shadow-xl relative overflow-hidden animate-in fade-in duration-500">
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
-        
         <div className="flex justify-between items-start">
           <div>
             <h2 className="text-3xl font-black text-slate-900">Sala de Espera</h2>
@@ -130,7 +131,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
           </div>
           <button onClick={onLeave} className="text-sm font-bold text-red-500 hover:bg-red-50 px-4 py-2 rounded-xl transition-all">Salir</button>
         </div>
-
         {isHost && pendingPlayers.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-3xl p-6 space-y-4">
              <div className="flex items-center gap-2">
@@ -150,7 +150,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
              </div>
           </div>
         )}
-
         <div className="bg-slate-50 border border-slate-100 rounded-2xl p-6 flex flex-col items-center gap-4">
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">ID de la Sala</p>
           <div className="flex items-center gap-3">
@@ -164,7 +163,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
             </button>
           </div>
         </div>
-
         <div className="space-y-4">
           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Conectados ({players.length})</h3>
           <div className="grid grid-cols-1 gap-2 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
@@ -179,7 +177,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
             ))}
           </div>
         </div>
-
         {isHost ? (
           <button 
             disabled={participantPlayers.length === 0}
@@ -190,7 +187,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
           </button>
         ) : (
           <div className="text-center py-4">
-            <p className="text-slate-400 animate-pulse font-medium">El Host iniciará pronto...</p>
+            <p className="text-slate-400 animate-pulse font-medium">Esperando a que el Host inicie...</p>
           </div>
         )}
       </div>
@@ -204,7 +201,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
           <h2 className="text-2xl font-black text-slate-900">Panel del Host</h2>
           <button onClick={onLeave} className="text-sm font-bold text-red-500 hover:bg-red-50 px-4 py-2 rounded-xl transition-all">Finalizar Partida</button>
         </div>
-
         {roundStatus === 'CONFIG' && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -222,15 +218,15 @@ const GameRoom: React.FC<GameRoomProps> = ({
             </button>
           </div>
         )}
-
         {roundStatus === 'ACTIVE' && (
           <div className="text-center py-12 space-y-4">
             <p className="text-xs font-black text-indigo-600 uppercase tracking-widest">Compitiendo...</p>
             <h3 className="text-9xl font-black text-slate-900 mono">{timer}s</h3>
-            <p className="text-slate-500 font-bold">Objetivo: {targetBpm} BPM</p>
+            <div className="bg-indigo-50 inline-block px-6 py-2 rounded-2xl">
+              <p className="text-indigo-600 font-black text-lg tracking-tight uppercase">Objetivo: {targetBpm} BPM</p>
+            </div>
           </div>
         )}
-
         {(roundStatus === 'RESULTS_BPM' || roundStatus === 'RESULTS_SCORES' || roundStatus === 'FINAL') && (
           <div className="space-y-6">
             <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6">
@@ -270,27 +266,37 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
       {roundStatus === 'ACTIVE' && (
         <div 
-          onClick={() => handleTap()} 
-          className="relative h-[400px] bg-white border-4 border-slate-100 hover:border-indigo-100 rounded-[60px] cursor-pointer flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-xl shadow-slate-200/50 select-none touch-none"
+          onPointerDown={() => handleTap()} 
+          className="relative h-[450px] bg-white border-4 border-slate-100 hover:border-indigo-100 rounded-[60px] cursor-pointer flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-xl shadow-slate-200/50 select-none touch-none"
         >
           <div className={`absolute inset-0 bg-indigo-50 transition-opacity duration-150 pointer-events-none ${Date.now() - lastLocalTap < 100 ? 'opacity-100' : 'opacity-0'}`}></div>
           <div className="absolute top-8 flex justify-between w-full px-12">
-            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Tiempo: {timer}s</span>
-            <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Objetivo: {targetBpm}</span>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Tiempo Restante</span>
+              <span className="text-2xl font-black text-slate-800 mono tracking-tighter">{timer}s</span>
+            </div>
+            <div className="flex flex-col text-right">
+              <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Objetivo</span>
+              <span className="text-2xl font-black text-slate-800 mono tracking-tighter">???</span>
+            </div>
           </div>
           <div className="text-center space-y-2 pointer-events-none">
-            <span className="text-9xl font-black text-slate-900 leading-none mono tracking-tighter">
+            <span className="text-[150px] font-black text-slate-900 leading-none mono tracking-tighter block">
               {localBpm}
             </span>
-            <p className="text-sm font-black text-indigo-600 uppercase tracking-widest">Tu BPM actual</p>
+            <p className="text-sm font-black text-indigo-600 uppercase tracking-widest">Tu Ritmo Actual (BPM)</p>
           </div>
           
           <button 
-            onClick={handleReset}
-            className="absolute bottom-8 right-8 bg-slate-50 hover:bg-slate-100 text-slate-400 p-3 rounded-2xl border border-slate-200 transition-all active:scale-95 z-10"
+            onPointerDown={(e) => { e.stopPropagation(); handleReset(); }}
+            className="absolute bottom-8 right-8 bg-slate-50 hover:bg-slate-100 text-slate-400 p-4 rounded-2xl border border-slate-200 transition-all active:scale-95 z-10 shadow-sm"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
           </button>
+
+          <p className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[10px] font-black text-slate-300 uppercase tracking-widest animate-pulse">
+            Toca en cualquier lugar para marcar el ritmo
+          </p>
         </div>
       )}
 
@@ -300,7 +306,9 @@ const GameRoom: React.FC<GameRoomProps> = ({
              <h2 className="text-2xl font-black text-slate-900">
                {roundStatus === 'FINAL' ? 'Resultados Finales' : 'Resultados de Ronda'}
              </h2>
-             <p className="text-xs font-bold text-slate-400 mt-1">Objetivo: {targetBpm} BPM</p>
+             <div className="bg-indigo-50 inline-block px-4 py-1 rounded-full mt-2">
+               <p className="text-xs font-black text-indigo-600 uppercase tracking-widest">Objetivo: {targetBpm} BPM</p>
+             </div>
           </div>
           <Leaderboard players={players} targetBpm={targetBpm} mode={roundStatus === 'RESULTS_BPM' ? 'BPM' : (roundStatus === 'FINAL' ? 'TOTAL' : 'ROUND')} />
           {roundStatus === 'FINAL' && (
