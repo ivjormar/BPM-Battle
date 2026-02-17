@@ -41,17 +41,33 @@ const GameRoom: React.FC<GameRoomProps> = ({
 
   const calculateBpm = useCallback(() => {
     const now = Date.now();
-    // Mantenemos una ventana de 2.5 segundos para el cálculo
-    tapTimesRef.current = [...tapTimesRef.current, now].filter(t => now - t < 2500);
     
+    // Si ha pasado demasiado tiempo desde el último toque (ej. 3 segundos), 
+    // reiniciamos el buffer para empezar una nueva medición limpia,
+    // pero MANTENEMOS el localBpm anterior en pantalla.
+    if (tapTimesRef.current.length > 0 && now - tapTimesRef.current[tapTimesRef.current.length - 1] > 3000) {
+      tapTimesRef.current = [];
+    }
+
+    tapTimesRef.current.push(now);
+
+    // Necesitamos al menos 2 toques para calcular un intervalo
     if (tapTimesRef.current.length < 2) return;
-    
+
+    // Solo usamos los últimos 8 toques para que el cálculo sea rápido y sensible a cambios de ritmo
+    if (tapTimesRef.current.length > 8) {
+      tapTimesRef.current.shift();
+    }
+
     const intervals = [];
     for (let i = 1; i < tapTimesRef.current.length; i++) {
-      intervals.push(tapTimesRef.current[i] - tapTimesRef.current[i-1]);
+      intervals.push(tapTimesRef.current[i] - tapTimesRef.current[i - 1]);
     }
-    
+
     const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+    // Evitar división por cero o intervalos absurdos
+    if (avgInterval <= 0) return;
+    
     const bpm = Math.round(60000 / avgInterval);
     
     setLocalBpm(bpm);
@@ -66,8 +82,12 @@ const GameRoom: React.FC<GameRoomProps> = ({
   }, [onStatUpdate]);
 
   const handleTap = useCallback((e?: React.MouseEvent | KeyboardEvent) => {
-    if (e && 'key' in e && e.key !== ' ') return;
-    // Solo permitimos tap si la ronda está activa y no somos el host
+    if (e && 'key' in e && e.key !== ' ' && e.key !== 'Enter') return;
+    if (e) {
+      // Prevenir scroll si es espacio
+      if ('key' in e && e.key === ' ') e.preventDefault();
+    }
+    
     if (roundStatus !== 'ACTIVE' || isHost) return;
     onTap();
     calculateBpm();
@@ -83,7 +103,6 @@ const GameRoom: React.FC<GameRoomProps> = ({
   }, [handleTap, handleReset]);
 
   useEffect(() => {
-    // Al empezar una nueva configuración o ronda, reseteamos el contador visual a 0
     if (roundStatus === 'CONFIG' || roundStatus === 'ACTIVE') {
       setLocalBpm(0);
       tapTimesRef.current = [];
@@ -250,13 +269,16 @@ const GameRoom: React.FC<GameRoomProps> = ({
       )}
 
       {roundStatus === 'ACTIVE' && (
-        <div onClick={() => handleTap()} className="relative h-[400px] bg-white border-4 border-slate-100 hover:border-indigo-100 rounded-[60px] cursor-pointer flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-xl shadow-slate-200/50">
+        <div 
+          onClick={() => handleTap()} 
+          className="relative h-[400px] bg-white border-4 border-slate-100 hover:border-indigo-100 rounded-[60px] cursor-pointer flex flex-col items-center justify-center overflow-hidden transition-all duration-300 shadow-xl shadow-slate-200/50 select-none touch-none"
+        >
           <div className={`absolute inset-0 bg-indigo-50 transition-opacity duration-150 pointer-events-none ${Date.now() - lastLocalTap < 100 ? 'opacity-100' : 'opacity-0'}`}></div>
           <div className="absolute top-8 flex justify-between w-full px-12">
             <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Tiempo: {timer}s</span>
             <span className="text-xs font-black text-slate-400 uppercase tracking-widest">Objetivo: {targetBpm}</span>
           </div>
-          <div className="text-center space-y-2">
+          <div className="text-center space-y-2 pointer-events-none">
             <span className="text-9xl font-black text-slate-900 leading-none mono tracking-tighter">
               {localBpm}
             </span>
@@ -265,7 +287,7 @@ const GameRoom: React.FC<GameRoomProps> = ({
           
           <button 
             onClick={handleReset}
-            className="absolute bottom-8 right-8 bg-slate-50 hover:bg-slate-100 text-slate-400 p-3 rounded-2xl border border-slate-200 transition-all active:scale-95"
+            className="absolute bottom-8 right-8 bg-slate-50 hover:bg-slate-100 text-slate-400 p-3 rounded-2xl border border-slate-200 transition-all active:scale-95 z-10"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
           </button>
